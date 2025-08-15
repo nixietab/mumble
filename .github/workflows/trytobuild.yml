@@ -1,0 +1,79 @@
+name: Nightly Linux Build and Release
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Runs at 2 AM UTC every day
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    name: Build Mumble for Linux and Push Nightly Release
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Qt
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.5.*'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            pkg-config \
+            libboost-all-dev \
+            libssl-dev \
+            libprotobuf-dev \
+            protobuf-compiler \
+            libopus-dev \
+            libcap-dev \
+            libxi-dev \
+            libasound2-dev \
+            libpulse-dev \
+            libspeexdsp-dev \
+            libavahi-compat-libdnssd-dev \
+            libsndfile1-dev \
+            qttools5-dev-tools \
+            qtbase5-dev \
+            qtbase5-private-dev \
+            qtmultimedia5-dev
+
+      - name: Build Mumble
+        run: |
+          mkdir build
+          cd build
+          cmake ..
+          make -j$(nproc)
+
+      - name: Find built binaries
+        id: find_binaries
+        run: |
+          cd build
+          BINARIES=$(find . -type f -executable -name 'mumble' -o -name 'murmurd' | tr '\n' ' ')
+          echo "BINARIES=$BINARIES" >> $GITHUB_OUTPUT
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly-linux
+          name: Nightly Linux Build
+          body: "Automated nightly build of Mumble for Linux."
+          prerelease: true
+          files: ${{ steps.find_binaries.outputs.BINARIES }}
+          draft: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Overwrite nightly tag (optional)
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -f nightly-linux
+          git push -f origin nightly-linux
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
