@@ -1,79 +1,72 @@
-name: Nightly Linux Build and Release
+name: "Nightly Build"
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: "0 0 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+
+env:
+  BUILD_TYPE: Release
+  CMAKE_OPTIONS: |
+    -Dtests=OFF -Dsymbols=ON -Dwarnings-as-errors=OFF
 
 jobs:
-  build-and-release:
+  pre_run:
     runs-on: ubuntu-latest
-    name: Build Mumble for Linux and Push Nightly Release
+    outputs:
+      should_skip: ${{ steps.skip_check.outputs.should_skip }}
+    steps:
+      - id: skip_check
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          concurrent_skipping: same_content_newer
+          skip_after_successful_duplicate: 'true'
+
+  build:
+    needs: pre_run
+    if: needs.pre_run.outputs.should_skip != 'true'
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          submodules: 'recursive'
-          fetch-depth: 1
+          submodules: recursive
 
-      - name: Set environment variables (mimic build.yml)
-        run: |
-          echo "BUILD_TYPE=Release" >> $GITHUB_ENV
-          echo "CMAKE_OPTIONS='-Dtests=ON -Dsymbols=ON -Ddisplay-install-paths=ON -Ddatabase-mysql-tests=ON -Ddatabase-postgresql-tests=ON'" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            ninja-build \
-            build-essential \
-            cmake \
-            pkg-config \
-            libboost-all-dev \
-            libssl-dev \
-            libprotobuf-dev \
-            protobuf-compiler \
-            libopus-dev \
-            libcap-dev \
-            libxi-dev \
-            libasound2-dev \
-            libpulse-dev \
-            libspeexdsp-dev \
-            libavahi-compat-libdnssd-dev \
-            libsndfile1-dev \
-            qttools5-dev-tools \
-            qtbase5-dev \
-            qtbase5-private-dev \
-            qtmultimedia5-dev
-
-      - name: Build Mumble (with build.sh)
-        run: |
-          chmod +x .github/workflows/build.sh
-          .github/workflows/build.sh
-
-      - name: Package build as tar.gz
-        run: |
-          cd "${GITHUB_WORKSPACE}/build"
-          tar czf ../mumble-nightly-linux.tar.gz .
-
-      - name: Create/Update nightly release with tarball
-        uses: softprops/action-gh-release@v2
+      - uses: ./.github/actions/install-dependencies
         with:
-          tag_name: nightly-linux
-          name: Nightly Linux Build
-          body: "Automated nightly build of Mumble for Linux."
+          type: shared
+          os: ubuntu-latest
+          arch: 64bit
+
+      - name: Create build dir
+        run: cmake -E make_directory ${{ runner.workspace }}/build
+
+      - name: Run CMake
+        run: |
+          cmake -G Ninja -S $GITHUB_WORKSPACE -B ${{ runner.workspace }}/build \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE $CMAKE_OPTIONS -DCMAKE_UNITY_BUILD=ON
+        shell: bash
+
+      - name: Build
+        working-directory: ${{ runner.workspace }}/build
+        run: cmake --build . --config $BUILD_TYPE
+        shell: bash
+
+      - name: Package build
+        run: |
+          cd ${{ runner.workspace }}/build
+          tar -czf build.tar.gz *
+        shell: bash
+
+      - name: Upload Nightly to Releases
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: nightly
+          name: "Nightly Build"
           prerelease: true
-          files: mumble-nightly-linux.tar.gz
-          draft: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Overwrite nightly tag (optional)
-        run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git tag -f nightly-linux
-          git push -f origin nightly-linux
+          files: ${{ runner.workspace }}/build/build.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
