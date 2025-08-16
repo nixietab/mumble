@@ -2,7 +2,7 @@ name: Nightly Linux Build and Release
 
 on:
   schedule:
-    - cron: '0 2 * * *'  # Runs at 2 AM UTC every day
+    - cron: '0 2 * * *'
   workflow_dispatch:
 
 jobs:
@@ -13,16 +13,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Set up Qt
-        uses: jurplel/install-qt-action@v3
         with:
-          version: '6.5.*'
-          
+          submodules: 'recursive'
+          fetch-depth: 1
+
+      - name: Set environment variables (mimic build.yml)
+        run: |
+          echo "BUILD_TYPE=Release" >> $GITHUB_ENV
+          echo "CMAKE_OPTIONS='-Dtests=ON -Dsymbols=ON -Ddisplay-install-paths=ON -Ddatabase-mysql-tests=ON -Ddatabase-postgresql-tests=ON'" >> $GITHUB_ENV
+
       - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            ninja-build \
             build-essential \
             cmake \
             pkg-config \
@@ -43,28 +47,24 @@ jobs:
             qtbase5-private-dev \
             qtmultimedia5-dev
 
-      - name: Build Mumble
+      - name: Build Mumble (with build.sh)
         run: |
-          mkdir build
-          cd build
-          cmake ..
-          make -j$(nproc)
+          chmod +x .github/workflows/build.sh
+          .github/workflows/build.sh
 
-      - name: Find built binaries
-        id: find_binaries
+      - name: Package build as tar.gz
         run: |
-          cd build
-          BINARIES=$(find . -type f -executable -name 'mumble' -o -name 'murmurd' | tr '\n' ' ')
-          echo "BINARIES=$BINARIES" >> $GITHUB_OUTPUT
+          cd "${GITHUB_WORKSPACE}/build"
+          tar czf ../mumble-nightly-linux.tar.gz .
 
-      - name: Create nightly release
+      - name: Create/Update nightly release with tarball
         uses: softprops/action-gh-release@v2
         with:
           tag_name: nightly-linux
           name: Nightly Linux Build
           body: "Automated nightly build of Mumble for Linux."
           prerelease: true
-          files: ${{ steps.find_binaries.outputs.BINARIES }}
+          files: mumble-nightly-linux.tar.gz
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
